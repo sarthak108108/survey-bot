@@ -1,167 +1,47 @@
-from flask import Flask, request, jsonify
-from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input, decode_predictions
-from tensorflow.keras.preprocessing import image
-import numpy as np
-from PIL import Image
-import io
-import tensorflow as tf
+import sys
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-app = Flask(__name__)
+yolo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'yolov3'))
+sys.path.insert(0, yolo_path)
 
-model = MobileNetV2(weights='imagenet')
+import torch
+from models.experimental import attempt_load
+from utils.dataloaders import letterbox
+from utils.general import non_max_suppression, scale_boxes
+import cv2
+import numpy as np
 
-class WasteClassifier:
-    def __init__(self, model_path=None):
+weights = 'yolov3.pt'
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = attempt_load(weights)
+model.eval()
 
-        self.waste_categories = {
-            'plastic_bottle': 'waste',
-            'water_bottle': 'waste',
-            'plastic_bag': 'waste',
-            'cup': 'waste',
-            'can': 'waste',
-            'beer_bottle': 'waste',
-            'wine_bottle': 'waste',
-            'pop_bottle': 'waste',
-            'paper': 'waste',
-            'cardboard': 'waste',
-            'packet': 'waste',
-            'envelope': 'waste',
-            'garbage': 'waste',
-            'trash': 'waste',
-            'waste_bin': 'waste',
-            'trash_can': 'waste',
-            'dumpster': 'waste',
-            'glass': 'waste',
-            'container': 'waste',
-            'straw': 'waste',
-            'carton': 'waste',
-            'food_waste': 'waste',
-            'banana_peel': 'waste',
-            'apple_core': 'waste',
-            
-        
-            'person': 'non-waste',
-            'car': 'non-waste',
-            'tree': 'non-waste',
-            'building': 'non-waste',
-            'chair': 'non-waste',
-            'table': 'non-waste',
-            'computer': 'non-waste',
-            'phone': 'non-waste',
-            'dog': 'non-waste',
-            'cat': 'non-waste',
-            'bicycle': 'non-waste',
-            'book': 'non-waste',
-            'television': 'non-waste',
-            'sofa': 'non-waste',
-            'house': 'non-waste'
-        }
-        
-        if model_path:
-            self.model = tf.keras.models.load_model(model_path)
-            self.preprocess = preprocess_input
-            self.use_imagenet_labels = False
-        else:
-            self.model = MobileNetV2(weights='imagenet')
-            self.preprocess = preprocess_input
-            self.use_imagenet_labels = True
-    
-    def _load_and_prepare_image(self, img_path):
-        img = image.load_img(img_path, target_size=(224, 224))
-        img_array = image.img_to_array(img)
-        img_array = np.expand_dims(img_array, axis=0)
-        return self.preprocess(img_array)
-    
-    def classify_image(self, img_path):
-        processed_img = self._load_and_prepare_image(img_path)
-        
-        predictions = self.model.predict(processed_img)
-        
-        if self.use_imagenet_labels:
+def Get_Predictions(image_path):
+    img0 = cv2.imread(image_path)  # Original image
+    img = letterbox(img0, new_shape=640)[0]  # Resize
+    img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, HWC to CHW
+    img = np.ascontiguousarray(img)
+    img = torch.from_numpy(img).to(device).float()
+    img /= 255.0
+    if img.ndimension() == 3:
+         img = img.unsqueeze(0)
 
-            decoded_predictions = decode_predictions(predictions, top=5)[0]
-            
+    with torch.no_grad():
+        pred = model(img)[0]
+        pred = non_max_suppression(pred, 0.25, 0.45)
 
-            top_prediction = decoded_predictions[0]
-            category_id, category_name, confidence = top_prediction
-            
+    for det in pred:
+        if len(det):
+            det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], img0.shape).round()
+            for *xyxy, conf, cls in det:
+                label = f'{model.names[int(cls)]} {conf:.2f}'
+                label_clean = model.names[int(cls)]
+                print(f'Detected {label} at {xyxy}')
+            # Draw on image
+                cv2.rectangle(img0, (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3])), (0, 255, 0), 2)
+                cv2.putText(img0, label, (int(xyxy[0]), int(xyxy[1]) - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    output_file_name = image_path[:-5] + '_out.jpg'
 
-            is_waste = False
-            matching_categories = []
-            
-            for _, label_name, label_conf in decoded_predictions:
-                clean_label = label_name.replace('_', ' ').lower()
-                
-                if label_name in self.waste_categories:
-                    matching_categories.append((label_name, label_conf, self.waste_categories[label_name]))
-                    if self.waste_categories[label_name] == 'waste':
-                        is_waste = True
-                
-                else:
-                    for category, category_type in self.waste_categories.items():
-                        if category.replace('_', ' ') in clean_label:
-                            matching_categories.append((label_name, label_conf, category_type))
-                            if category_type == 'waste':
-                                is_waste = True
-                            break
-            
-            if not matching_categories:
-                waste_classification = 'non-waste'
-            else:
-                matching_categories.sort(key=lambda x: x[1], reverse=True)
-                waste_classification = matching_categories[0][2]
-                
-            return {
-                'image_path': img_path,
-                'top_category': category_name,
-                'confidence': float(confidence),
-                'top_5_predictions': [(label, float(conf)) for _, label, conf in decoded_predictions],
-                'waste_classification': waste_classification,
-                'is_waste': waste_classification == 'waste',
-                'matching_categories': matching_categories
-            }
-        else:
-            predicted_class_idx = np.argmax(predictions, axis=1)[0]
-            confidence = float(predictions[0][predicted_class_idx])
-            
-            category_name = f"class_{predicted_class_idx}"
-            
-            waste_classification = self.waste_categories.get(category_name, 'non-waste')
-            
-            return {
-                'image_path': img_path,
-                'predicted_class': predicted_class_idx,
-                'category': category_name,
-                'confidence': confidence,
-                'waste_classification': waste_classification,
-                'is_waste': waste_classification == 'waste'
-            }
-
-
-@app.route('/predict', methods=['POST'])
-def predict(model_path=None):
-    classifier = WasteClassifier(model_path=model_path)
-
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image uploaded'}), 400
-
-    file = request.files['image']
-    
-    try:
-        img = Image.open(file.stream).convert('RGB')
-        img = img.resize((224, 224))
-        result = classifier.classify_image(img)
-        return jsonify({
-            'predicted_label': label,
-            'confidence': confidence,
-            'is_waste': is_waste
-        })
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0',port=5000,debug=True)
+    cv2.imwrite(output_file_name, img0)
+    return output_file_name, label_clean

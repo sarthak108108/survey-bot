@@ -1,0 +1,4 @@
+.env
+/__pycache__
+/.venv
+yolov3.pt
