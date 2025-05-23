@@ -108,4 +108,4 @@ api.add_resource(Model, '/model/predict/<int:id>')
     
 
 if __name__ == '__main__':
-    app.run(debug=True, port=4100)
+    app.run(debug=False)
