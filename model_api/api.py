@@ -4,6 +4,7 @@ from dotenv import load_dotenv;
 from flask import Flask, request;
 from flask_restful import Api, Resource, fields ,marshal_with , abort;
 from werkzeug.utils import secure_filename;
+import requests;
 
 from cloudinary import uploader
 import cloudinary
@@ -14,6 +15,7 @@ app = Flask(__name__)
 api = Api(app)
 app.config['upload_folder'] = os.path.join(app.root_path, 'uploads')
 app.config['ALLOWED_EXTENSIONS'] = {'jpeg'}
+spring_boot_url = 'https:/localhost8080/'
 
 load_dotenv()
 cloudinary_key=os.getenv('CLOUDINARY_KEY')
@@ -64,15 +66,14 @@ class Model(Resource):
 
         # bin_level = args[0]['bin_level']
         bin_level = float(request.form['bin_level'])
-        if bin_level < 0 or bin_level > 1:
-            abort(400, message='bin level should be between 0 and 1')
+        if bin_level < 0 or bin_level > 100:
+            abort(400, message='bin level should be between 0 and 100')
 
 #validation ends here
 #Model Call
         output_file_name, label_clean = Get_Predictions(filepath)
         if not output_file_name:
             abort(400, message='Model prediction failed')
-        print(label_clean)
         
 #check for allowed labels
         trash_labels = {"umbrella","handbag", "tie", "sports ball", "kite", "bottle", "wine glass", "cup", "fork", "knife", "bowl", "spoon",
@@ -96,6 +97,32 @@ class Model(Resource):
             abort(400, message='File not uploaded to cloudinary')
         os.remove(filepath)
         os.remove(output_file_name)
+
+#spring-boot calls
+    #post the results to spring endpoint 
+    #check if upload was successful
+    #return suitable status code and response
+        try: 
+            bin_save_request = requests.post(f"{spring_boot_url}/api/bins", json={
+                'id': id,
+                'bin_level': bin_level,
+                'Image': output_url['secure_url'],
+                'label': label_clean
+            }, timeout=10)
+            if bin_save_request.status_code != 200:
+                bin_save_request.raise_for_status()
+                abort(400, message="failed to update database!")
+            else:
+                return {
+                    'id': id,
+                    'bin_level': bin_level,
+                    'Image': output_url['secure_url'],
+                    'label': label_clean,
+                    'status': f"success: {bin_save_request.status_code}"
+                }
+            
+        except requests.exceptions.RequestException as e:
+            abort(400, message="connection to db failed")
         #
         return {
             'id': id,
@@ -103,6 +130,9 @@ class Model(Resource):
             'Image': output_url['secure_url'],
             'label':label_clean
         }
+    
+#spring-boot-relay
+
         
 api.add_resource(Model, '/model/predict/<int:id>')
     
