@@ -1,7 +1,7 @@
 import os;
 from dotenv import load_dotenv;
 
-from flask import Flask, request;
+from flask import Flask, request, jsonify;
 from flask_restful import Api, Resource, fields ,marshal_with , abort;
 from werkzeug.utils import secure_filename;
 import requests;
@@ -15,7 +15,7 @@ app = Flask(__name__)
 api = Api(app)
 app.config['upload_folder'] = os.path.join(app.root_path, 'uploads')
 app.config['ALLOWED_EXTENSIONS'] = {'jpeg'}
-spring_boot_url = 'https:/localhost8080/'
+spring_boot_url = os.getenv('SPRING_BOOT_URL')
 
 load_dotenv()
 cloudinary_key=os.getenv('CLOUDINARY_KEY')
@@ -132,7 +132,18 @@ class Model(Resource):
         }
     
 #spring-boot-relay
+@app.route('/relay/<path: endpoint>', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+def relay(endpoint):
+    method = request.method
+    url = f"{spring_boot_url}{endpoint}"
+    data = request.get_json(silent=True)
+    headers = {'Content-Type': 'application/json'}
 
+    try:
+        response = requests.request(method, url, json = data, headers = headers, timeout=10)
+        return jsonify(response.json()), response.status_code
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': str(e)}), 500
         
 api.add_resource(Model, '/model/predict/<int:id>')
     
